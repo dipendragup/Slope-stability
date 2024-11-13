@@ -1,0 +1,129 @@
+import pandas as pd
+import numpy as np
+import random
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from scipy.linalg import norm, pinv
+
+# Step 1: Generate Synthetic Data
+def generate_slope_stability_data(num_samples=200):
+    np.random.seed(42)
+    data = {
+        'slope_angle': np.random.uniform(10, 70, num_samples),        # degrees
+        'rock_density': np.random.uniform(2000, 3000, num_samples),   # kg/m³
+        'water_content': np.random.uniform(5, 15, num_samples),       # percentage
+        'friction_angle': np.random.uniform(20, 45, num_samples),     # degrees
+        'cohesion': np.random.uniform(50, 200, num_samples),          # kPa
+    }
+    # Target variable: Stability (1 for stable, 0 for unstable)
+    # Adding some randomness for the binary stability outcome based on generated features
+    data['stability'] = (data['slope_angle'] < 45) & (data['water_content'] < 10) & (data['cohesion'] > 100)
+    data['stability'] = data['stability'].astype(int)  # Convert to binary (1/0)
+
+    return pd.DataFrame(data)
+
+# Generate synthetic dataset
+data = generate_slope_stability_data()
+print(data.head())
+
+# Step 2: Prepare Data for Training
+X = data[['slope_angle', 'rock_density', 'water_content', 'friction_angle', 'cohesion']]
+y = data['stability']  # Target variable
+
+# Split the dataset into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Standardize the features for better model performance
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Step 3: Define the Radial Basis Function Neural Network
+class RBFNN:
+    def __init__(self, num_centers, sigma):
+        self.num_centers = num_centers
+        self.sigma = sigma
+        self.centers = None
+        self.weights = None
+
+    def _rbf(self, x, center):
+        return np.exp(-norm(x - center) ** 2 / (2 * self.sigma ** 2))
+
+    def _calculate_activations(self, X):
+        # Calculate the RBFs for each input sample
+        G = np.zeros((X.shape[0], self.num_centers))
+        for i, sample in enumerate(X):
+            for j, center in enumerate(self.centers):
+                G[i, j] = self._rbf(sample, center)
+        return G
+
+    def fit(self, X, y):
+        # Select random centers
+        indices = np.random.choice(X.shape[0], self.num_centers, replace=False)
+        self.centers = X[indices]
+
+        # Calculate the activations
+        G = self._calculate_activations(X)
+
+        # Solve for weights using the pseudo-inverse
+        self.weights = pinv(G).dot(y)
+
+    def predict(self, X):
+        G = self._calculate_activations(X)
+        return G.dot(self.weights)
+
+# Step 4: Define the Imperialist Competitive Algorithm (ICA) Optimizer
+class ICAOptimizer:
+    def __init__(self, rbf_model, X, y, num_countries, num_imperialists, max_generations):
+        self.rbf_model = rbf_model
+        self.X = X
+        self.y = y
+        self.num_countries = num_countries
+        self.num_imperialists = num_imperialists
+        self.max_generations = max_generations
+
+    def _initialize_population(self):
+        # Initialize countries with random sigma values
+        return [random.uniform(0.1, 10.0) for _ in range(self.num_countries)]
+
+    def _fitness(self, sigma):
+        # Set the sigma and train the model
+        self.rbf_model.sigma = sigma
+        self.rbf_model.fit(self.X, self.y)
+        predictions = self.rbf_model.predict(self.X)
+        # Calculate mean squared error as fitness
+        return np.mean((self.y - predictions) ** 2)
+
+    def run(self):
+        # Initialize countries and assign imperialists
+        countries = self._initialize_population()
+        # Evaluate fitness and find the best configuration
+        best_fitness = float('inf')
+        best_sigma = None
+        for generation in range(self.max_generations):
+            for country in countries:
+                fitness = self._fitness(country)
+                if fitness < best_fitness:
+                    best_fitness = fitness
+                    best_sigma = country
+        return best_sigma
+
+# Step 5: Train and Evaluate the Optimized RBFNN Model
+# Define and optimize the RBF model using ICA
+rbf_model = RBFNN(num_centers=10, sigma=1.0)
+ica_optimizer = ICAOptimizer(rbf_model, X_train_scaled, y_train, num_countries=20, num_imperialists=5, max_generations=50)
+
+# Find the best sigma value
+optimal_sigma = ica_optimizer.run()
+print(f"Optimal Sigma: {optimal_sigma}")
+
+# Train the RBF model with the optimal sigma
+rbf_model.sigma = optimal_sigma
+rbf_model.fit(X_train_scaled, y_train)
+
+# Evaluate the model
+y_pred = rbf_model.predict(X_test_scaled)
+y_pred_binary = np.round(y_pred).astype(int)  # Convert predictions to binary for accuracy calculation
+accuracy = np.mean(y_pred_binary == y_test)
+
+print(f"Model Accuracy: {accuracy}")
